@@ -4,6 +4,7 @@ import { User } from "../ models/user.models.js";
 import { uploadOnCloudinary } from "../ utils/cloudinary.js";
 import { ApiResponse } from "../ utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
+import transporter from "../utils/nodemailer.js";
 
 const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -97,6 +98,15 @@ const loginUser = asyncHandler(async (req, res) => {
         maxAge: 7*24*60*60*1000
     }
 
+    const mailOptions = {
+        from: process.env.SENDER_EMAIL,
+        to: email,
+        subject: "Welcome to ",
+        text: `You have successfully logged in to _ via email ${email}`
+    }
+
+    await transporter.sendMail(mailOptions)
+
     return res
     .status(200)
     .cookie("accessToken", accessToken, options)
@@ -139,6 +149,118 @@ const logoutUser = asyncHandler(async (req, res) => {
         {},
         "User logged out"
     ))
+})
+
+const sendVerifyOtp = asyncHandler(async (req, res) => {
+try {
+        const {userId} = req.user._id
+    
+        const user = await User.findById(userId)
+        if (user.isAccountVerified) {
+            return res.status(200).json(new ApiResponse(200, "user already verified"))
+        }
+    
+        const otp = String(Math.floor( 1000 + Math.random() * 9000))
+
+        user.verifyOtp = otp
+        user.verifyOtpExpireAt = Date.now() * 60 * 60 * 1000
+        await user.save()
+
+        const mailOptions = {
+            from: process.env.SENDER_EMAIL,
+            to: user.email,
+            subject: "Account Verification Required ",
+            text: `In order to verify you account, use this otp ${otp} `
+        }
+
+        return res
+        .status(200)
+        .json( new ApiResponse(
+            200, 
+            {},
+            "Verification code sent via Email. Check your registered mail")
+        )
+
+} catch (error) {
+    throw new ApiError(500, error?.message || "Account verification Failed!")
+}
+})
+
+const verifyEmail = asyncHandler(async (req, res) => {
+    const {otp} = req.body
+    const {userId} = req.user._id
+
+    if (!userId || !otp ) {
+        throw new ApiError(404, "userId and otp is required")
+    }
+    try {
+        const user = await User.findById(userId)
+
+        if (!user) {
+            throw new ApiError(404, "User not found")
+        }
+
+        if (user.verifyOtp === "" || user.verifyOtp !== otp){
+            throw new ApiError(400, "Invalid Otp")
+        }
+
+        if (user.verifyOtpExpireAt < Date.now()){
+            throw new ApiError(400, "Otp expired!")
+        }
+
+        user.isAccountVerified = true;
+        user.verifyOtp = "";
+        user.verifyOtpExpireAt = 0;
+
+        await user.save()
+
+        return res
+        .status(200)
+        .json(new ApiResponse(
+            200, 
+            {}, 
+            "Email verified successfully")
+        )
+
+    } catch (error) {
+        
+    }
+
+})
+
+const sendResetOtp = asyncHandler(async (req, res) => {
+    const {email} = req.body
+
+    if (!email) {
+        throw new ApiError(401, "Email is required")
+    }
+
+    const user = await User.findOne({email})
+
+    if (!user) {
+        throw new ApiError(404, "No user found with this email")
+    }
+
+    const otp = String(Math.floor( 1000 + Math.random() * 9000))
+
+    user.resetOtp = otp
+    user.resetOtpExpireAt = Date.now() * 15 * 60 * 1000
+    await user.save()
+
+    const mailOptions = {
+        from: process.env.SENDER_EMAIL,
+        to: user.email,
+        subject: "Password reset request ",
+        text: `Use this otp to reset your password ${otp} `
+    }
+
+    return res
+    .status(200)
+    .json(new ApiResponse(
+        200, 
+        {}, 
+        "Password reset otp sent to Email")
+    )
 })
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
@@ -191,16 +313,29 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 })
 
 const changePassword = asyncHandler(async (req, res) => {
-    const {oldPassword, newPassword} = req.body
+    const {email, newPassword, otp} = req.body 
 
-    const user = await User.findById(req.user?._id)
-    const isPasswordCorrect = await user.isPasswordCorrect(oldPassword)
+    if (!email || !newPassword || !otp) {
+        throw new ApiError(404, "all fields are required")
+    }
 
-    if (!isPasswordCorrect) {
-        throw new ApiError(400, "invalid password")
+    const user = await User.findOne({email})
+
+    if (!user) {
+        throw new ApiError(400, "user not found")
+    }
+
+    if (user.resetOtp === "" || user.resetOtpExpireAt !== otp){
+        throw new ApiError(401, "invalid otp")
+    }
+
+    if (resetOtpExpireAt < Date.now()) {
+        throw new ApiError(400, "otp expired")
     }
 
     user.password = newPassword
+    user.resetOtp = ''
+    user.resetOtpExpireAt = 0
     await user.save({validateBeforeSave: false})
 
     return res
@@ -235,4 +370,7 @@ export {
     refreshAccessToken,
     changePassword,
     getCurrentUser,
+    sendVerifyOtp,
+    sendResetOtp,
+    verifyEmail
 }

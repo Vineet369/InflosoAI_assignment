@@ -1,8 +1,8 @@
-import { asyncHandler } from "../ utils/asyncHandler.js";
-import { ApiError } from "../ utils/ApiError.js";
-import { User } from "../ models/user.models.js";
-import { uploadOnCloudinary } from "../ utils/cloudinary.js";
-import { ApiResponse } from "../ utils/ApiResponse.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
+import { User } from "../models/user.model.js";
+import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
 import transporter from "../utils/nodemailer.js";
 
@@ -23,7 +23,6 @@ const generateAccessAndRefreshToken = async (userId) => {
 
 const registerUser = asyncHandler(async (req, res) => {
     const {fullName, userName, email, password} = req.body
-
     if ([fullName, userName, email, password].some((entry) => {
         entry?.trim===""
     })){
@@ -46,7 +45,7 @@ const registerUser = asyncHandler(async (req, res) => {
     const coverImage = await uploadOnCloudinary(coverImageFilePath)
 
     const user = await User.create({
-        fullName,
+        fullName: userName,
         email,
         userName: userName.toLowerCase(),
         coverImage: coverImage?.url || "",
@@ -105,7 +104,7 @@ const loginUser = asyncHandler(async (req, res) => {
         text: `You have successfully logged in to _ via email ${email}`
     }
 
-    await transporter.sendMail(mailOptions)
+    // await transporter.sendMail(mailOptions)
 
     return res
     .status(200)

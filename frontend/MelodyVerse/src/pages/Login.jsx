@@ -1,13 +1,51 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useContext, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AppContent } from '../context/AppContext';
+import axios from 'axios';
+import { toast } from 'react-toastify';
 
 const Login = () => {
     const navigate = useNavigate()
 
+    const {backendUrl, setIsLoggedIn, getUserData} = useContext(AppContent)
+
     const [state, setState] = useState('Sign Up')
-    const [name, setName] = useState('')
+    const [userName, setName] = useState('')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
+
+    const onSubmitHandler = async (e) => {
+        try {
+            e.preventDefault();
+
+            axios.defaults.withCredentials = true
+            if(state === 'Sign Up') {
+                const {data} = await axios.post(backendUrl + '/api/v1/users/register', {userName, email, password})
+                if(data.success){
+                    setIsLoggedIn(true)
+                    setState('Login')
+                    setEmail('')
+                    setPassword('')
+                    getUserData()
+                }else{
+                    toast.error(data.message)
+                }
+            }else{
+                const {data} = await axios.post(backendUrl + '/api/v1/users/login', {email, password})
+                console.log(data)
+
+                if(data.success){
+                    setIsLoggedIn(true)
+                    navigate('/')
+                }else{
+                    toast.error(data.message)
+                }
+            }
+        } catch (error) {
+            console.log(error)
+            toast.error(error.message)
+        }
+    }
   return (
     <div className='flex items-center justify-center min-h-screen px-6 sm:px-0 bg-gradient-to-br from-blue-200 to-purple-400'>
       <img onClick={() => navigate('/')} src={"#"} alt='' className='absolute left-5 sm:left-20 top-5 w-28 sm:w-32 cursor-pointer'/>
@@ -17,13 +55,13 @@ const Login = () => {
 
         <p className='text-center text-sm mb-6'>{state === 'Sign Up' ? 'Create your account' : 'Login to your account!'}</p>
 
-        <form>
+        <form onSubmit={onSubmitHandler}>
             {state === 'Sign Up' && (
                 <div className='mb-4 flex items-center gap-3 w-full px-5 py-2.5 rounded-full bg-[#333A5C]'>
                     <img src={"#"} alt=''/>
                     <input 
                     onChange={e => setName(e.target.value)} 
-                    value={name} 
+                    value={userName} 
                     className='bg-transparent outline-none' 
                     type='text' 
                     placeholder='Full Name' 

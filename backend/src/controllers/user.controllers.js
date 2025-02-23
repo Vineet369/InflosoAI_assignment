@@ -17,16 +17,16 @@ const generateAccessAndRefreshToken = async (userId) => {
 
         return {accessToken, refreshToken}
     } catch (error) {
-        throw new ApiError(500, "access and refresh token generation failed!")
+        res.status(401).json({status: false, message: error?.message})
     }
 }
 
 const registerUser = asyncHandler(async (req, res) => {
-    const {fullName, userName, email, password} = req.body
-    if ([fullName, userName, email, password].some((entry) => {
+    const {userName, email, signUpPassword, rememberMe} = req.body
+    if ([userName, email, signUpPassword].some((entry) => {
         entry?.trim===""
     })){
-        throw new ApiError(400, "Field cannot be empty")
+        res.status(401).json({success: false, message: "Field cannot be empty"})
     }
 
     const existedUser = await User.findOne({
@@ -34,7 +34,7 @@ const registerUser = asyncHandler(async (req, res) => {
     })
 
     if (existedUser){
-        throw new ApiError(409, "Email or username already registered")
+        res.status(401).json({success: false, message: "Email or username already registered"})
     }
 
     let coverImageFilePath;
@@ -45,11 +45,10 @@ const registerUser = asyncHandler(async (req, res) => {
     const coverImage = await uploadOnCloudinary(coverImageFilePath)
 
     const user = await User.create({
-        fullName: userName,
         email,
         userName: userName.toLowerCase(),
         coverImage: coverImage?.url || "",
-        password
+        password: signUpPassword
     })
 
     const createdUser = await User.findById(user._id).select(
@@ -57,33 +56,50 @@ const registerUser = asyncHandler(async (req, res) => {
     )
 
     if (!createdUser){
-        throw new ApiError(500, "Something went wrong while registering user!")
+        res.status(401).json({success: false, message:"Something went wrong while registering user!"})
     }
 
-    return res.status(201).json(
-        new ApiResponse(200, createdUser, "User registration successful")
-    )
+    const {accessToken, refreshToken} = await generateAccessAndRefreshToken(user._id)
+    if(rememberMe){
+    
+        const options = {
+            httpOnly: true,
+            secure: process.env.PROJECT_ENV === "production",
+            sameSite: process.env.PROJECT_ENV === "production" ? "none" : "strict",
+        }
+    
+        return res
+        .status(201)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(200, createdUser, "User registration successful")
+        )
+    }else{
+        return res
+        .status(201)
+        .cookie("accessToken", accessToken, options)
+        .json(
+            new ApiResponse(200, createdUser, "User registration successful")
+        )
+    }
 })
 
 const loginUser = asyncHandler(async (req, res) => {
-    const {email, userName, password} = req.body
+    const {email, password, rememberMe} = req.body
 
-    if (!(userName || email)){
-        throw new ApiError(400, "Please provide valid username or email")
+    if (!email){
+        res.status(404).json({success: false, message:"Please provide valid email"})
     }
 
-    const user = await User.findOne({
-        $or: [{email},{userName}]
-    })
-
+    const user = await User.findOne({email})
     if (!user) {
-        throw new ApiError(404, "No registered user data found")
+        res.status(404).json({success: false, message: "No registered user data found"})
     }
 
     const isPasswordValid = await user.isPasswordCorrect(password)
-
     if (!isPasswordValid){
-        throw new ApiError(401, "Invalid User Credentials")
+        res.status(401).json({success: false, message: "Invalid User Credentials"})
     }
     // console.log("user", user)
     const {accessToken, refreshToken} = await generateAccessAndRefreshToken(user._id)
@@ -94,7 +110,6 @@ const loginUser = asyncHandler(async (req, res) => {
         httpOnly: true,
         secure: process.env.PROJECT_ENV === "production",
         sameSite: process.env.PROJECT_ENV === "production" ? "none" : "strict",
-        maxAge: 7*24*60*60*1000
     }
 
     const mailOptions = {
@@ -105,20 +120,34 @@ const loginUser = asyncHandler(async (req, res) => {
     }
 
     // await transporter.sendMail(mailOptions)
-
-    return res
-    .status(200)
-    .cookie("accessToken", accessToken, options)
-    .cookie("refreshToken", refreshToken, options)
-    .json(
-        new ApiResponse(
-            200,
-            {
-                loggedInUser, accessToken, refreshToken
-            },
-            "User login successful"
+    if(rememberMe){
+        return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    loggedInUser, accessToken, refreshToken
+                },
+                "User login successful"
+            )
+        )    
+    }else{
+        return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    loggedInUser, accessToken, refreshToken
+                },
+                "User login successful"
+            )
         )
-    )
+    }
 })
 
 const logoutUser = asyncHandler(async (req, res) => {
@@ -136,7 +165,7 @@ const logoutUser = asyncHandler(async (req, res) => {
         httpOnly: true,
         secure: process.env.PROJECT_ENV === "production",
         sameSite: process.env.PROJECT_ENV === "production" ? "none" : "strict",
-        maxAge: 7*24*60*60*1000
+      
     }
 
     return res
@@ -151,10 +180,8 @@ const logoutUser = asyncHandler(async (req, res) => {
 })
 
 const sendVerifyOtp = asyncHandler(async (req, res) => {
-try {
-        const {userId} = req.user._id
-    
-        const user = await User.findById(userId)
+    try {
+        const user = await User.findById(req.user?._id)
         if (user.isAccountVerified) {
             return res.status(200).json(new ApiResponse(200, "user already verified"))
         }
@@ -171,6 +198,7 @@ try {
             subject: "Account Verification Required ",
             text: `In order to verify you account, use this otp ${otp} `
         }
+        // await transporter.sendMail(mailOptions)
 
         return res
         .status(200)
@@ -180,31 +208,30 @@ try {
             "Verification code sent via Email. Check your registered mail")
         )
 
-} catch (error) {
-    throw new ApiError(500, error?.message || "Account verification Failed!")
+    } catch (error) {
+        res.status(500).json({success: false, message: error?.message})
 }
 })
 
 const verifyEmail = asyncHandler(async (req, res) => {
     const {otp} = req.body
-    const {userId} = req.user._id
 
-    if (!userId || !otp ) {
-        throw new ApiError(404, "userId and otp is required")
+    if (!otp ) {
+        res.status(404).json({success: false, message:"otp is required"})
     }
     try {
-        const user = await User.findById(userId)
+        const user = await User.findById(req.user._id)
 
         if (!user) {
-            throw new ApiError(404, "User not found")
+            res.status(404).json({success: false, message: "User not found"})
         }
 
         if (user.verifyOtp === "" || user.verifyOtp !== otp){
-            throw new ApiError(400, "Invalid Otp")
+            res.status(400).json({success: false, message: "Invalid Otp"})
         }
 
         if (user.verifyOtpExpireAt < Date.now()){
-            throw new ApiError(400, "Otp expired!")
+            res.status(400).json({success: false, message: "Otp expired!"})
         }
 
         user.isAccountVerified = true;
@@ -222,7 +249,7 @@ const verifyEmail = asyncHandler(async (req, res) => {
         )
 
     } catch (error) {
-        
+        res.status(500).json({success: false, message: error?.message})
     }
 
 })
@@ -231,13 +258,13 @@ const sendResetOtp = asyncHandler(async (req, res) => {
     const {email} = req.body
 
     if (!email) {
-        throw new ApiError(401, "Email is required")
+        res.status(401).json({success: false, message: "Email is required"})
     }
 
     const user = await User.findOne({email})
 
     if (!user) {
-        throw new ApiError(404, "No user found with this email")
+        res.status(404).json({success: false, message: "No user found with this email"})
     }
 
     const otp = String(Math.floor( 1000 + Math.random() * 9000))
@@ -252,6 +279,7 @@ const sendResetOtp = asyncHandler(async (req, res) => {
         subject: "Password reset request ",
         text: `Use this otp to reset your password ${otp} `
     }
+    // await transporter.sendMail(mailOptions)
 
     return res
     .status(200)
@@ -265,7 +293,7 @@ const sendResetOtp = asyncHandler(async (req, res) => {
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const currentRefreshToken = req.cookies.refreshToken || req.body.refreshToken
     if (!currentRefreshToken) {
-        throw new ApiError(401, "Unauthorised access")
+        res.status(401).json({success: false, message: "Unauthorised access"})
     }
 
     try {
@@ -274,11 +302,11 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
         const user = await User.findById(verifiedToken?._id)
     
         if (!user) {
-            throw new ApiError(401, "Invalid refresh token")
+            res.status(401).json({success: false, message: "Invalid refresh token"})
         }
     
         if (currentRefreshToken !==user?.refreshToken) {
-            throw new ApiError(401, "Refresh token expired or used")
+            res.status(401).json({success: false, message: "Refresh token expired or used"})
         }
     
         const options = {
@@ -304,10 +332,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
             )   
         )
     } catch (error) {
-        throw new ApiError(
-            401,
-            error?.message || "invalid token"
-        )
+        res.status(500).json({success: false, message: error?.message})
     }
 })
 
@@ -315,21 +340,21 @@ const changePassword = asyncHandler(async (req, res) => {
     const {email, newPassword, otp} = req.body 
 
     if (!email || !newPassword || !otp) {
-        throw new ApiError(404, "all fields are required")
+        res.status(404).json({success: false, message: "all fields are required"})
     }
 
     const user = await User.findOne({email})
 
     if (!user) {
-        throw new ApiError(400, "user not found")
+        res.status(400).json({success: false, message: "user not found"})
     }
 
-    if (user.resetOtp === "" || user.resetOtpExpireAt !== otp){
-        throw new ApiError(401, "invalid otp")
+    if (user.resetOtp === "" || user.resetOtp !== otp){
+        res.status(401).json({success: false, message: "invalid otp"})
     }
 
-    if (resetOtpExpireAt < Date.now()) {
-        throw new ApiError(400, "otp expired")
+    if (user.resetOtpExpireAt < Date.now()) {
+        res.status(400).json({success: false, message: "otp expired"})
     }
 
     user.password = newPassword
@@ -361,6 +386,15 @@ const getCurrentUser = asyncHandler(async (req, res) => {
     )
 })
 
+const isAuthenticated = asyncHandler(async (req, res) => {
+    res
+    .status(200)
+    .json(new ApiResponse(
+        200,
+        {},
+        "user is authenticated"
+    ))
+})
 
 export {
     registerUser,
@@ -371,5 +405,6 @@ export {
     getCurrentUser,
     sendVerifyOtp,
     sendResetOtp,
-    verifyEmail
+    verifyEmail,
+    isAuthenticated
 }
